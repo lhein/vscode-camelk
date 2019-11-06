@@ -98,41 +98,48 @@ export function getPlatform() : string | undefined {
     return undefined;
 }
 
-async function downloadAndExtract(link : string, dlFilename: string, installFolder : string, extractFlag : boolean) : Promise<boolean> {
-	let myStatusBarItem: vscode.StatusBarItem;
-	myStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-
+function downloadFileWithProgress(link : string, dlFilename: string, installFolder : string, extractFlag: boolean) : boolean {
 	const downloadSettings = {
-        filename: `${dlFilename}`,
-        extract: extractFlag,
-	  };
+		filename: `${dlFilename}`,
+		extract: extractFlag,
+	};
 	extension.mainOutputChannel.appendLine('Downloading from: ' + link);
-	await download(link, installFolder, downloadSettings)
-		.on('response', (response) => {
-			extension.mainOutputChannel.appendLine(`Bytes to transfer: ${response.headers['content-length']}`);
-		}).on('downloadProgress', (progress) => {
-			let incr = progress.total > 0 ? Math.floor(progress.transferred / progress.total * 100) : 0;
-			let percent = Math.round(incr);
-			let message = `Download progress: ${progress.transferred} / ${progress.total} (${percent}%)`;
-			updateStatusBarItem(myStatusBarItem, message);
-		}).then(async () => {
-			extension.mainOutputChannel.appendLine(`Downloaded ${dlFilename}.`);
-			myStatusBarItem.dispose();
-			return true;
-		}).catch((error) => {
-			console.log(error);
+	let progressTitle : string = `Download (${dlFilename})`;
+
+	vscode.window.withProgress({
+		location: vscode.ProgressLocation.Notification,
+		title: progressTitle,
+		cancellable: false
+	}, async (progress, token) => {
+		progress.report({ increment: 0 });
+
+		let lastProg:number = 0;
+		await download(link, installFolder, downloadSettings)
+			.on('response', (response) => {
+				extension.mainOutputChannel.appendLine(`Bytes to transfer: ${response.headers['content-length']}`);
+			}).on('downloadProgress', (progressamt) => {
+				let incr = progressamt.total > 0 ? Math.floor((progressamt.transferred - lastProg) / progressamt.total * 100) : 0;
+				if (incr >= 1) {
+					progress.report({increment: incr, message: `${Math.floor(progressamt.transferred / progressamt.total * 100)}%`});
+					lastProg = progressamt.transferred;
+				}
+				if (progressamt.transferred >= progressamt) {
+					return true;
+				}
 		});
-	myStatusBarItem.dispose();
+	});
 	return false;
 }
 
-function updateStatusBarItem(sbItem : vscode.StatusBarItem, text: string): void {
-	if (text) {
-		sbItem.text = text;
-		sbItem.show();
-	} else {
-		sbItem.hide();
-	}
+function downloadAndExtract(link : string, dlFilename: string, installFolder : string, extract : boolean) : Promise<boolean> {
+	return new Promise<boolean>( async (resolve, reject) => {
+		if (downloadFileWithProgress(link, dlFilename, installFolder, extract)) {
+			extension.mainOutputChannel.appendLine('done!');
+			resolve(true);
+		} else {
+			resolve(false);
+		}
+	});
 }
 
 export async function installKamel(context: vscode.ExtensionContext): Promise<Errorable<null>> {
@@ -167,7 +174,8 @@ export async function installKamel(context: vscode.ExtensionContext): Promise<Er
 
 	extension.shareMessageInMainOutputChannel(`Downloading kamel cli tool from ${kamelUrl} to ${downloadFile}`);
 
-	await downloadAndExtract(kamelUrl, kamelCliFile, installFolder, true)
+	downloadAndExtract(kamelUrl, kamelCliFile, installFolder, true)
+	// await grabTarGzAndUnGZ(kamelUrl, installFolder)
 	.then( async (flag) => {
 	 	console.log(`Downloaded ${downloadFile} successfully: ${flag}`);
 	 	if (fs.existsSync(downloadFile)) {
@@ -252,7 +260,7 @@ export async function installKubectl(context: vscode.ExtensionContext): Promise<
 
 	extension.shareMessageInMainOutputChannel(`Downloading Kubernetes cli tool from ${kubectlUrl} to ${downloadFile}`);
 
-	await downloadAndExtract(kubectlUrl, binFile, installFolder, true)
+	downloadAndExtract(kubectlUrl, binFile, installFolder, true)
 	.then( async (flag) => {
 		console.log(`Downloaded ${downloadFile} successfully: ${flag}`);
 	}).catch ( (error) => {
