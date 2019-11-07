@@ -98,47 +98,41 @@ export function getPlatform() : string | undefined {
     return undefined;
 }
 
-function downloadFileWithProgress(link : string, dlFilename: string, installFolder : string, extractFlag: boolean) : boolean {
-	const downloadSettings = {
-		filename: `${dlFilename}`,
-		extract: extractFlag,
-	};
-	extension.mainOutputChannel.appendLine('Downloading from: ' + link);
-	let progressTitle : string = `Download (${dlFilename})`;
-
-	vscode.window.withProgress({
-		location: vscode.ProgressLocation.Notification,
-		title: progressTitle,
-		cancellable: false
-	}, async (progress, token) => {
-		progress.report({ increment: 0 });
-
-		let lastProg:number = 0;
-		await download(link, installFolder, downloadSettings)
-			.on('response', (response) => {
-				extension.mainOutputChannel.appendLine(`Bytes to transfer: ${response.headers['content-length']}`);
-			}).on('downloadProgress', (progressamt) => {
-				let incr = progressamt.total > 0 ? Math.floor((progressamt.transferred - lastProg) / progressamt.total * 100) : 0;
-				if (incr >= 1) {
-					progress.report({increment: incr, message: `${Math.floor(progressamt.transferred / progressamt.total * 100)}%`});
-					lastProg = progressamt.transferred;
-				}
-				if (progressamt.transferred >= progressamt) {
-					return true;
-				}
-		});
-	});
-	return false;
-}
-
 function downloadAndExtract(link : string, dlFilename: string, installFolder : string, extract : boolean) : Promise<boolean> {
 	return new Promise<boolean>( async (resolve, reject) => {
-		if (downloadFileWithProgress(link, dlFilename, installFolder, extract)) {
+		const downloadSettings = {
+			filename: `${dlFilename}`,
+			extract: extract,
+		};
+		extension.mainOutputChannel.appendLine('Downloading from: ' + link);
+		let progressTitle : string = `Download (${dlFilename})`;
+		vscode.window.withProgress({
+			location: vscode.ProgressLocation.Notification,
+			title: progressTitle,
+			cancellable: false
+		}, async (progress, token) => {
+			progress.report({ increment: 0 });
+			let lastProg:number = 0;
+			let success:boolean = false;
+			await download(link, installFolder, downloadSettings)
+				.on('response', (response) => {
+					extension.mainOutputChannel.appendLine(`Bytes to transfer: ${response.headers['content-length']}`);
+				})
+				.on('downloadProgress', (progressamt) => {
+					let incr = progressamt.total > 0 ? Math.floor((progressamt.transferred - lastProg) / progressamt.total * 100) : 0;
+					if (incr >= 1) {
+						progress.report({increment: incr, message: `${Math.floor(progressamt.transferred / progressamt.total * 100)}%`});
+						lastProg = progressamt.transferred;
+					}
+					if (progressamt.transferred >= progressamt.total) {
+						success = true;
+					}
+				});
+			resolve(success);
+		})
+		.then( () => {
 			extension.mainOutputChannel.appendLine('done!');
-			resolve(true);
-		} else {
-			resolve(false);
-		}
+		});
 	});
 }
 
@@ -176,13 +170,13 @@ export async function installKamel(context: vscode.ExtensionContext): Promise<Er
 
 	downloadAndExtract(kamelUrl, kamelCliFile, installFolder, true)
 	// await grabTarGzAndUnGZ(kamelUrl, installFolder)
-	.then( async (flag) => {
+	.then( (flag) => {
 	 	console.log(`Downloaded ${downloadFile} successfully: ${flag}`);
 	 	if (fs.existsSync(downloadFile)) {
 	 		if (shell.isUnix()) {
 	 			fs.chmodSync(downloadFile, '0700');
 	 		}
-	 		await config.addKamelPathToConfig(downloadFile);
+	 		config.addKamelPathToConfig(downloadFile);
 	 	}
 	})
 	.catch ( (error) => {
@@ -261,17 +255,18 @@ export async function installKubectl(context: vscode.ExtensionContext): Promise<
 	extension.shareMessageInMainOutputChannel(`Downloading Kubernetes cli tool from ${kubectlUrl} to ${downloadFile}`);
 
 	downloadAndExtract(kubectlUrl, binFile, installFolder, true)
-	.then( async (flag) => {
+	.then( (flag) => {
 		console.log(`Downloaded ${downloadFile} successfully: ${flag}`);
+		if (flag === true) {
+			if (shell.isUnix()) {
+				fs.chmodSync(downloadFile, '0700');
+			}
+			config.addKubectlPathToConfig(downloadFile);
+		}
 	}).catch ( (error) => {
 		console.log(error);
 		return { succeeded: false, error: [`Failed to download kubectl: ${error}`] };
 	});
-	await config.addKubectlPathToConfig(downloadFile);
-
-	if (shell.isUnix()) {
-		fs.chmodSync(downloadFile, '0700');
-	}
 
 	return { succeeded: true, result: null };
 }
